@@ -9,15 +9,16 @@ import {
 } from '@nestjs/common';
 import { NotificationService } from './notification.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
+import { Response } from 'express';
 
 @Controller('')
 export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}
 
   @Post('notificar')
-  notificar(@Body() dto: CreateNotificationDto, @Res() res) {
+  notificar(@Body() dto: CreateNotificationDto, @Res() res: Response) {
     this.notificationService.enfileirar(dto);
-    return res.status(HttpStatus.ACCEPTED).json({ mensagemId: dto.mensagemId });
+    return res.status(HttpStatus.ACCEPTED).json({ messageId: dto.mensagemId });
   }
 
   @Get('notificacao/status/:id')

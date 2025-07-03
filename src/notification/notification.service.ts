@@ -1,47 +1,63 @@
-import { Injectable } from '@nestjs/common';
-import { connect, Channel } from 'amqplib';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { NotificationStatusService } from './notification-status.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
+import { RabbitMQService } from 'src/shared/rabbitmq.service';
+
 @Injectable()
-export class NotificationService {
-  private channel: Channel;
-  private readonly filaEntrada = 'fila.notificacao.entrada.matheus';
-  private readonly filaStatus = 'fila.notificacao.status.matheus';
-  private statusMap = new Map<string, string>();
+export class NotificationService implements OnModuleInit {
+  private readonly logger = new Logger(NotificationService.name);
+  private readonly filaEntrada =
+    process.env.RMQ_FILA_ENTRADA || 'fila.notificacao.entrada.matheus';
+  private readonly filaStatus =
+    process.env.RMQ_FILA_STATUS || 'fila.notificacao.status.matheus';
+
+  constructor(
+    private readonly rabbitService: RabbitMQService,
+    private readonly statusService: NotificationStatusService,
+  ) {}
 
   async onModuleInit() {
-    const conn = await connect('amqp://localhost');
-    this.channel = await conn.createChannel();
+    const channel = await this.rabbitService.connect();
 
-    await this.channel.assertQueue(this.filaEntrada);
-    await this.channel.assertQueue(this.filaStatus);
+    await channel.assertQueue(this.filaEntrada);
+    await channel.assertQueue(this.filaStatus);
 
-    this.channel.consume(this.filaEntrada, async (msg) => {
-      if (!msg) return;
-      const data = JSON.parse(msg.content.toString());
+    channel.consume(this.filaEntrada, async (msg) => {
+      try {
+        if (!msg) return;
+        const data = JSON.parse(msg.content.toString());
 
-      // Simula processamento com atraso aleatório
-      await new Promise((r) => setTimeout(r, 1000 + Math.random() * 1000));
-      const falha = Math.floor(Math.random() * 10) < 2;
+        // Simula processamento com atraso aleatório
+        await new Promise((r) => setTimeout(r, 1000 + Math.random() * 1000));
 
-      const status = falha ? 'FALHA_PROCESSAMENTO' : 'PROCESSADO_SUCESSO';
-      this.statusMap.set(data.mensagemId, status);
+        const falha = Math.floor(Math.random() * 10) < 2;
+        const status = falha ? 'FALHA_PROCESSAMENTO' : 'PROCESSADO_SUCESSO';
 
-      this.channel.sendToQueue(
-        this.filaStatus,
-        Buffer.from(JSON.stringify({ mensagemId: data.mensagemId, status })),
-      );
+        this.statusService.setStatus(data.mensagemId, status);
 
-      this.channel.ack(msg);
+        channel.sendToQueue(
+          this.filaStatus,
+          Buffer.from(JSON.stringify({ mensagemId: data.mensagemId, status })),
+        );
+
+        channel.ack(msg);
+        this.logger.log(`Mensagem ${data.mensagemId} processada: ${status}`);
+      } catch (error) {
+        this.logger.error('Erro ao processar mensagem da fila', error);
+      }
     });
   }
 
-  enfileirar(dto: CreateNotificationDto) {
+  async enfileirar(dto: CreateNotificationDto) {
+    const channel = await this.rabbitService.connect();
     const buffer = Buffer.from(JSON.stringify(dto));
-    this.channel.sendToQueue(this.filaEntrada, buffer);
-    this.statusMap.set(dto.mensagemId, 'AGUARDANDO_PROCESSAMENTO');
+
+    channel.sendToQueue(this.filaEntrada, buffer);
+    this.statusService.setStatus(dto.mensagemId, 'AGUARDANDO_PROCESSAMENTO');
+    this.logger.log(`Mensagem ${dto.mensagemId} enfileirada.`);
   }
 
   getStatus(id: string) {
-    return { mensagemId: id, status: this.statusMap.get(id) || 'DESCONHECIDO' };
+    return this.statusService.getStatus(id);
   }
 }
